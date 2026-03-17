@@ -7,6 +7,7 @@
 #include <fcntl.h>
 
 #include "gxlimg.h"
+#include "bl2.h"
 #include "bl3.h"
 #include "amlcblk.h"
 #include "amlsblk.h"
@@ -63,6 +64,36 @@ out:
 		close(fdout);
 	if(fdin >= 0)
 		close(fdin);
+	return ret;
+}
+
+/**
+ * Sign a BL30 boot image (two-step: BL2-sign then BL3x-wrap)
+ *
+ * @param fin: Path of BL30 binary input file
+ * @param fout: Path of BL30 boot image output file
+ * @return: 0 on success, negative number otherwise
+ */
+int gi_bl30_sign_img(char const *fin, char const *fout)
+{
+	char tmppath[] = "/tmp/gxlimg-bl30-XXXXXX";
+	int tmpfd, ret;
+
+	tmpfd = mkstemp(tmppath);
+	if(tmpfd < 0)
+		return -errno;
+	close(tmpfd);
+
+	/* Step 1: BL2-format signing */
+	ret = gi_bl2_sign_img(fin, tmppath);
+	if(ret < 0)
+		goto out;
+
+	/* Step 2: BL3x-format wrapping */
+	ret = gi_bl3_sign_img(tmppath, fout);
+
+out:
+	unlink(tmppath);
 	return ret;
 }
 

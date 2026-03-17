@@ -165,7 +165,7 @@ static void usage(char const *progname)
 	ERR("\t--bl31\n");
 	ERR("\t\tBL31 boot file to add in final boot image\n");
 	ERR("\t--bl33\n");
-	ERR("\t\tBL31 boot file to add in final boot image\n");
+	ERR("\t\tBL33 boot file to add in final boot image\n");
 	ERR("\t--rev\n");
 	ERR("\t\tFIP format revision (v2 or v3)\n");
 }
@@ -182,8 +182,10 @@ static int gi_sign_img(struct gi_opt *gopt)
 
 	switch(gopt->blopt.type) {
 	case GT_BL2:
-	case GT_BL30:
 		ret = gi_bl2_sign_img(gopt->blopt.fin, gopt->blopt.fout);
+		break;
+	case GT_BL30:
+		ret = gi_bl30_sign_img(gopt->blopt.fin, gopt->blopt.fout);
 		break;
 	case GT_BL3X:
 		ret = gi_bl3_sign_img(gopt->blopt.fin, gopt->blopt.fout);

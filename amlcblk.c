@@ -359,6 +359,7 @@ int gi_amlcblk_aes_enc(struct amlcblk *acb, int fout, int fin)
 	uint8_t *block = NULL, *enc = NULL;
 	size_t i;
 	ssize_t nr, wnr;
+	int outlen;
 	off_t off;
 	int ret;
 	uint8_t hdr[AMLCBLKSZ] = {};
@@ -452,8 +453,8 @@ int gi_amlcblk_aes_enc(struct amlcblk *acb, int fout, int fin)
 			gi_amlcblk_blk_pad(acb, block, nr);
 
 		nr = acb->blksz;
-		ret = EVP_EncryptUpdate(ctx, enc, (int *)&nr, block, nr);
-		if((ret != 1) || ((size_t)nr != acb->blksz)) {
+		ret = EVP_EncryptUpdate(ctx, enc, &outlen, block, nr);
+		if((ret != 1) || ((size_t)outlen != acb->blksz)) {
 			ret = -ERR_get_error();
 			SSLERR(ret, "Cannot Encrypt block: ");
 			goto out;
@@ -474,7 +475,7 @@ int gi_amlcblk_aes_enc(struct amlcblk *acb, int fout, int fin)
 			goto out;
 		}
 	}
-	ret = EVP_EncryptFinal_ex(ctx, enc, (int *)&nr);
+	ret = EVP_EncryptFinal_ex(ctx, enc, &outlen);
 	if(ret != 1) {
 		ret = -ERR_get_error();
 		SSLERR(ret, "Cannot finalise binary payload: ");
@@ -505,6 +506,7 @@ int gi_amlcblk_aes_dec(struct amlcblk *acb, int fout, int fin)
 	uint8_t *block = NULL, *dec = NULL;
 	size_t i;
 	ssize_t nr, wnr;
+	int outlen;
 	off_t off;
 	int ret;
 	uint8_t hdr[AMLCBLKSZ];
@@ -585,7 +587,7 @@ int gi_amlcblk_aes_dec(struct amlcblk *acb, int fout, int fin)
 		goto out;
 	}
 
-	/* Encrypt each binary block and write them in boot image */
+	/* Decrypt each binary block and write them in boot image */
 	for(i = 0; i < acb->payloadsz; i += nr) {
 		nr = gi_amlcblk_read_blk(fin, block, acb->blksz);
 		if(nr <= 0) {
@@ -595,10 +597,10 @@ int gi_amlcblk_aes_dec(struct amlcblk *acb, int fout, int fin)
 		}
 
 		nr = acb->blksz;
-		ret = EVP_DecryptUpdate(ctx, dec, (int *)&nr, block, nr);
-		if((ret != 1) || ((size_t)nr != acb->blksz)) {
+		ret = EVP_DecryptUpdate(ctx, dec, &outlen, block, nr);
+		if((ret != 1) || ((size_t)outlen != acb->blksz)) {
 			ret = -ERR_get_error();
-			SSLERR(ret, "Cannot Encrypt block: ");
+			SSLERR(ret, "Cannot Decrypt block: ");
 			goto out;
 		}
 
@@ -617,7 +619,7 @@ int gi_amlcblk_aes_dec(struct amlcblk *acb, int fout, int fin)
 			goto out;
 		}
 	}
-	ret = EVP_DecryptFinal_ex(ctx, dec, (int *)&nr);
+	ret = EVP_DecryptFinal_ex(ctx, dec, &outlen);
 	if(ret != 1) {
 		ret = -ERR_get_error();
 		SSLERR(ret, "Cannot finalise binary payload: ");

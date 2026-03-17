@@ -57,7 +57,7 @@ static inline int gi_random(uint8_t *buf, size_t sz)
 	fd = ret;
 
 	for(i = 0; i < sz; i += nr) {
-		nr = read(fd, buf, sz - i);
+		nr = read(fd, buf + i, sz - i);
 		if(nr < 0) {
 			PERR("Cannot read /dev/urandom: ");
 			ret = (int)nr;

@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build gxlimg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build gxlimg
+        run: nix build .#packages.x86_64-linux.gxlimg -L
+
+      - name: Show build output
+        run: nix build .#packages.x86_64-linux.gxlimg --print-out-paths | xargs ls -la

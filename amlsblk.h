@@ -10,6 +10,12 @@
 
 #define BL3xHDR_SZ	(BL3xIV_SZ + BL3xSB_SZ + BL3xSIG_SZ)
 
+#define BL3xIMGHDR_SZ		0x100	/* BL3X-HDR prefix size */
+#define BL3xIMGHDR_MAGIC	"BL3X-HDR"
+#define BL3xIMGHDR_INFO_OFF	0x10	/* Offset of img_info within BL3X-HDR */
+#define BL3xIMGHDR_INFO_SZ	0x50	/* Size of img_info (BL31 header excerpt) */
+#define BL3xNONCE_OFF		0x490	/* Nonce offset from @KEY envelope start */
+
 /* Amlogic signature block description */
 struct amlsblk {
 	size_t payloadsz;
@@ -20,6 +26,7 @@ struct amlsblk {
 	uint8_t hash[BL3xSHA2_SZ];
 	uint8_t hdr_hash[BL3xSHA2_SZ];
 	uint8_t hdr[BL3xHDR_SZ - BL3xIV_SZ - BL3xSHA2_SZ];
+	uint8_t imghdr[IMGHDR_SZ];	/* Original BL31 image header */
 };
 
 int gi_amlsblk_init(struct amlsblk *asb, int fd);

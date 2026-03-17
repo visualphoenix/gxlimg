@@ -131,15 +131,46 @@ int gi_amlsblk_flush_data(struct amlsblk *asb, int fin, int fout)
 	uint8_t block[512];
 	ssize_t rd, wr;
 	off_t off;
+	off_t hdr_prefix;
 	size_t nr;
 	int ret;
+
+	hdr_prefix = AMLSBLK_HAS_HDR(asb) ? BL3xIMGHDR_SZ : 0;
+
+	/* Write BL3X-HDR prefix if input had BL31 header */
+	if(AMLSBLK_HAS_HDR(asb)) {
+		uint8_t bl3x_hdr[BL3xIMGHDR_SZ] = { 0 };
+		uint8_t *info = bl3x_hdr + BL3xIMGHDR_INFO_OFF;
+		memcpy(bl3x_hdr, BL3xIMGHDR_MAGIC, 8);
+		bh_wr(bl3x_hdr, 32, 0x0C, 0x100);	/* version */
+		/*
+		 * img_info layout (0x50 bytes at BL3X-HDR+0x10):
+		 *   [0x00..0x07] = imghdr[0x08..0x0F] (load addr)
+		 *   [0x08..0x0F] = imghdr[0x10..0x17] (entry addr)
+		 *   [0x10..0x17] = imghdr[0x20..0x27] (segment 2 addr)
+		 *   [0x18..0x1B] = imghdr[0x18..0x1B] (segment 1 size)
+		 *   [0x1C..0x1F] = imghdr[0x28..0x2B] (segment 2 size)
+		 *   [0x20..0x4F] = imghdr[0x00..0x2F] (raw header copy)
+		 */
+		memcpy(info + 0x00, asb->imghdr + 0x08, 8);
+		memcpy(info + 0x08, asb->imghdr + 0x10, 8);
+		memcpy(info + 0x10, asb->imghdr + 0x20, 8);
+		memcpy(info + 0x18, asb->imghdr + 0x18, 4);
+		memcpy(info + 0x1C, asb->imghdr + 0x28, 4);
+		memcpy(info + 0x20, asb->imghdr + 0x00, 0x30);
+		wr = gi_amlsblk_write_blk(fout, bl3x_hdr, sizeof(bl3x_hdr));
+		if(wr < 0) {
+			ret = (int)wr;
+			goto out;
+		}
+	}
 
 	bh_wr(key_hdr, 32, 0x0, AMLSBLK_KEY_MAGIC);
 	bh_wr(key_hdr, 32, 0x4, BL3xKEYHDR_SZ);
 	bh_wr(key_hdr, 8,  0x8, 0x1);
 	bh_wr(key_hdr, 8,  0xa, BL3xKEYHDR_SZ);
 
-	off = lseek(fout, 0, SEEK_SET);
+	off = lseek(fout, hdr_prefix, SEEK_SET);
 	if(off < 0) {
 		SEEK_ERR(off, ret);
 		goto out;
@@ -151,7 +182,7 @@ int gi_amlsblk_flush_data(struct amlsblk *asb, int fin, int fout)
 		goto out;
 	}
 
-	off = lseek(fout, 0x490, SEEK_SET);
+	off = lseek(fout, hdr_prefix + BL3xNONCE_OFF, SEEK_SET);
 	if(off < 0) {
 		SEEK_ERR(off, ret);
 		goto out;
@@ -345,8 +376,10 @@ int gi_amlsblk_init(struct amlsblk *asb, int fd)
 		goto out;
 	}
 
-	if(bh_rd(img_hdr, 32, 0) == BL31_MAGIC)
+	if(bh_rd(img_hdr, 32, 0) == BL31_MAGIC) {
 		AMLSBLK_SET_HDR(asb);
+		memcpy(asb->imghdr, img_hdr, IMGHDR_SZ);
+	}
 
 	asb->blksz = 0x200;
 	fsz = lseek(fd, 0, SEEK_END);
@@ -361,6 +394,8 @@ int gi_amlsblk_init(struct amlsblk *asb, int fd)
 
 	asb->totsz = ROUNDUP(fsz + BL3xHDR_SZ, asb->blksz);
 	asb->hashsz = (asb->totsz - BL3xHDR_SZ);
+	if(AMLSBLK_HAS_HDR(asb))
+		asb->totsz += BL3xIMGHDR_SZ;
 	ret = 0;
 
 out:

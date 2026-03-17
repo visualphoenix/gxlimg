@@ -36,7 +36,10 @@
 enum fip_rev {
 	GI_FIP_V2,	/* GXL, GXM */
 	GI_FIP_V3,	/* G12A, G12B, SM1 */
+	GI_FIP_V3_AXG,	/* AXG — V3 signing but preserves @AML in FIP */
 };
+
+#define FIP_IS_V3(r) ((r) == GI_FIP_V3 || (r) == GI_FIP_V3_AXG)
 
 /**
  * Read a block of data from a file
@@ -380,6 +383,7 @@ static inline int fip_init(struct fip *fip, enum fip_rev rev)
 		}
 		break;
 	case GI_FIP_V3:
+	case GI_FIP_V3_AXG:
 		ret = ftruncate(fip->fd, FIP_SZ - SHA2_SZ);
 		if(ret < 0) {
 			PERR("Cannot truncate fip toc header: ");
@@ -459,7 +463,7 @@ static int fip_read_toc(struct fip_toc_info *toc, int fd, enum fip_rev rev,
 	enum FIP_BOOT_IMG type;
 	int ret;
 
-	off = lseek(fd, rev == GI_FIP_V3 ? bl2sz + TOC_OFFSET_V3 : 0,
+	off = lseek(fd, FIP_IS_V3(rev) ? bl2sz + TOC_OFFSET_V3 : 0,
 			SEEK_SET);
 	if(off < 0) {
 		SEEK_ERR(off, ret);
@@ -609,7 +613,7 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 		sz = (size_t)off;
 
 		/* Detect a AMLSBLK image a skip header if found on V3 */
-		if (rev == GI_FIP_V3) {
+		if (FIP_IS_V3(rev)) {
 			off = lseek(fdin, 0, SEEK_SET);
 			if(off < 0) {
 				SEEK_ERR(off, ret);
@@ -625,8 +629,12 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 
 			if (le32toh(*(uint32_t *)buf) == AMLSBLK_KEY_MAGIC) {
 				/* Bare @KEY at offset 0 (no BL3X-HDR).
-				 * Strip entire signing envelope. */
-				skip = BL3xNONCE_OFF + BL3xHDR_SZ;
+				 * G12A: strip entire envelope (0x720)
+				 * AXG: preserve @AML sub-header (0x490) */
+				if (rev == GI_FIP_V3_AXG)
+					skip = BL3xNONCE_OFF;
+				else
+					skip = BL3xNONCE_OFF + BL3xHDR_SZ;
 				sz -= skip;
 			} else if (memcmp(buf, BL3xIMGHDR_MAGIC, 8) == 0) {
 				/* BL3X-HDR at offset 0, @KEY at 0x100 */
@@ -644,7 +652,7 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 	entry.size = sz;
 
 	off = FTE_OFF(fip->nrentries);
-	if (rev == GI_FIP_V3)
+	if (FIP_IS_V3(rev))
 		off += TOC_OFFSET_V3;
 	
 	off = lseek(fip->fd, off, SEEK_SET);
@@ -722,7 +730,7 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 		goto out;
 	}
 	gi_fip_dump_img(fdin, fdout, bl2sz + entry.offset);
-	if (rev == GI_FIP_V3)
+	if (FIP_IS_V3(rev))
 		fip->cursz += sz;
 	else
 		fip->cursz += ROUNDUP(sz, 0x4000);
@@ -1150,6 +1158,9 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		if (ddrfw_count > 0)
 			DBG("Adding %d DDR firmwares in %s\n",
 				ddrfw_count, fout);
+	} else if (revc && !strcmp(revc, "axg")) {
+		DBG("Creating an AXG v3 FIP\n");
+		rev = GI_FIP_V3_AXG;
 	}
 
 	DBG("Create FIP final image in %s\n", fout);
@@ -1200,7 +1211,7 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		goto out;
 
 	/* Add the DDR firmwares entries */
-	if (rev == GI_FIP_V3 && ddrfw_count) {
+	if (FIP_IS_V3(rev) && ddrfw_count) {
 		ret = gi_fip_ddrfw_init(&fip, ddrfw_count);
 		if (ret < 0)
 			goto out;
@@ -1222,7 +1233,7 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 	/* Add all BL3* images */
 	for(i = 0; i < ARRAY_SIZE(fip_bin_path); ++i) {
 		/* FBI_BL301 is no more for V3 */
-		if (rev == GI_FIP_V3 && fip_bin_path[i].type == FBI_BL301)
+		if (FIP_IS_V3(rev) && fip_bin_path[i].type == FBI_BL301)
 			continue;
 		/* Do not add entry if missing on V2 */
 		if (rev == GI_FIP_V2 && !fip_bin_path[i].path)
@@ -1246,7 +1257,7 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 	}
 
 	/* Add the Image DATA entries, even if the image still boots without */
-	if (rev == GI_FIP_V3) {
+	if (FIP_IS_V3(rev)) {
 		static enum FIP_BOOT_IMG const data_list[] = {
 			FBI_BL2_DATA,
 			FBI_BL30_DATA,
@@ -1804,7 +1815,7 @@ int gi_fip_extract(char const *fip, char const *dir)
 	if(ret < 0)
 		goto out;
 
-	if (rev == GI_FIP_V3)
+	if (FIP_IS_V3(rev))
 		ret = fip_read_toc(&toc, fdin, rev, bl2sz);
 	else
 		ret = gi_fip_extract_fip(&toc, fdin, dir);
@@ -1815,7 +1826,7 @@ int gi_fip_extract(char const *fip, char const *dir)
 	if(ret < 0)
 		goto out;
 
-	if (rev == GI_FIP_V3)
+	if (FIP_IS_V3(rev))
 		ret = gi_fip_extract_ddrfw(fdin, dir, bl2sz);
 
 out:

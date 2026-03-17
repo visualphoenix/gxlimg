@@ -167,7 +167,7 @@ static void usage(char const *progname)
 	ERR("\t--bl33\n");
 	ERR("\t\tBL33 boot file to add in final boot image\n");
 	ERR("\t--rev\n");
-	ERR("\t\tFIP format revision (v2 or v3)\n");
+	ERR("\t\tFIP format revision (v2, v3, or axg)\n");
 }
 
 /**

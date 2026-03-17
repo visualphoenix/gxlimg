@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  build:
+    name: "Build (${{ matrix.arch }})"
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64-linux
+            runner: ubuntu-latest
+          - arch: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build static binary
+        run: nix build .#packages.${{ matrix.arch }}.gxlimg-static -L
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: gxlimg-${{ matrix.arch }}
+          path: result/bin/gxlimg
+
+  source:
+    name: Source tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create clean source tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir="gxlimg-${version}"
+          mkdir "$dir"
+          cp -r *.c *.h *.py Makefile LICENSE README* "$dir/" 2>/dev/null || true
+          tar czf "gxlimg-${version}-src.tar.gz" "$dir"
+
+      - name: Upload source tarball
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-tarball
+          path: gxlimg-*-src.tar.gz
+
+  release:
+    name: Create release
+    needs: [ build, source ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mv artifacts/gxlimg-x86_64-linux/gxlimg "gxlimg-${version}-x86_64-linux"
+          mv artifacts/gxlimg-aarch64-linux/gxlimg "gxlimg-${version}-aarch64-linux"
+          mv artifacts/source-tarball/gxlimg-*-src.tar.gz .
+          chmod +x gxlimg-*-linux
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            gxlimg-*-x86_64-linux
+            gxlimg-*-aarch64-linux
+            gxlimg-*-src.tar.gz

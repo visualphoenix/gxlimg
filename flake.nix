@@ -15,6 +15,7 @@
       packages = forAllSystems (system:
         let pkgs = pkgsFor system; in {
           gxlimg = pkgs.callPackage ./package.nix { };
+          gxlimg-static = pkgs.pkgsStatic.callPackage ./package.nix { };
           default = self.packages.${system}.gxlimg;
         }
       );

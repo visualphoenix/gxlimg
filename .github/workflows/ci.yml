@@ -23,3 +23,46 @@ jobs:
 
       - name: Show build output
         run: nix build .#packages.x86_64-linux.gxlimg --print-out-paths | xargs ls -la
+
+  compare-tests:
+    name: "Test: ${{ matrix.board }}"
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - compare-g12a-odroid-c4
+          - compare-g12a-vim3l
+          - compare-g12a-bananapi-m5
+          - compare-g12b-odroid-n2
+          - compare-g12b-radxa-zero2
+          - compare-g12b-khadas-vim3
+          - compare-axg-jethub-j100
+          - compare-gxl-lepotato
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # Comparison tests use __noChroot = true because the
+          # proprietary binaries (run via qemu-x86_64) read
+          # /dev/urandom for nonce generation. Without sandbox
+          # access to /dev/urandom, qemu-x86_64 hangs indefinitely.
+          extra-conf: |
+            sandbox = relaxed
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: "Run comparison test: ${{ matrix.board }}"
+        run: nix build .#checks.x86_64-linux.${{ matrix.board }} -L
+
+      - name: Show test report
+        if: always()
+        run: |
+          out=$(nix build .#checks.x86_64-linux.${{ matrix.board }} --print-out-paths 2>/dev/null || true)
+          if [ -n "$out" ] && [ -f "$out/report.txt" ]; then
+            cat "$out/report.txt"
+          else
+            echo "No report available (test may have failed to build)"
+          fi

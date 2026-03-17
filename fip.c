@@ -20,6 +20,11 @@
 #define BL31_ENTRY_MAGIC (0x87654321)
 #define BL31_MAGIC (0x12348765)
 #define AMLSBLK_KEY_MAGIC	(*(uint32_t *)"@KEY")
+#define BL3xIMGHDR_MAGIC	"BL3X-HDR"
+#define BL3xIMGHDR_SZ		0x100
+#define BL3xIMGHDR_INFO_OFF	0x10
+#define BL3xNONCE_OFF		0x490
+#define BL3xHDR_SZ		0x290	/* IV(0x10) + SB(0x80) + SIG(0x200) */
 #define BL2SZ (0xc000)
 #define TOC_OFFSET_V3 (0x10)
 
@@ -222,7 +227,10 @@ static uint8_t const uuid_data[][FT_DATA_SIZE] = {
 	},
 	[FBI_BL32_DATA] = {
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00
+		0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x20, 0x00,
 		/* Rest is 0x0 */
 	},
 	[FBI_BL33_DATA] = {},
@@ -587,6 +595,7 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 	size_t sz;
 	ssize_t nr;
 	size_t skip = 0;
+	int has_bl3x_hdr = 0;
 	off_t off;
 	int ret;
 	uint8_t buf[FTE_BL31HDR_SZ];
@@ -607,7 +616,7 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 				goto out;
 			}
 
-			nr = gi_fip_read_blk(fdin, buf, 4);
+			nr = gi_fip_read_blk(fdin, buf, 8);
 			if(nr <= 0) {
 				PERR("Cannot read BL image entry\n");
 				ret = -errno;
@@ -615,8 +624,15 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 			}
 
 			if (le32toh(*(uint32_t *)buf) == AMLSBLK_KEY_MAGIC) {
-				skip = 0x490;
+				/* Bare @KEY at offset 0 (no BL3X-HDR).
+				 * Strip entire signing envelope. */
+				skip = BL3xNONCE_OFF + BL3xHDR_SZ;
 				sz -= skip;
+			} else if (memcmp(buf, BL3xIMGHDR_MAGIC, 8) == 0) {
+				/* BL3X-HDR at offset 0, @KEY at 0x100 */
+				skip = BL3xIMGHDR_SZ + BL3xNONCE_OFF;
+				sz -= skip;
+				has_bl3x_hdr = 1;
 			}
 		}
 	} else
@@ -647,7 +663,14 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 	if (!sz)
 		goto nofdin;
 
-	off = lseek(fdin, 256, SEEK_SET);
+	/* Determine where BL31 header info lives */
+	if(has_bl3x_hdr) {
+		/* BL3X-HDR contains BL31 info at offset 0x10 */
+		off = lseek(fdin, BL3xIMGHDR_INFO_OFF, SEEK_SET);
+	} else {
+		/* Encrypted file: BL31 header at offset 256 (after AMLC block) */
+		off = lseek(fdin, 256, SEEK_SET);
+	}
 	if(off < 0) {
 		SEEK_ERR(off, ret);
 		goto out;
@@ -661,9 +684,11 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 
 	/*
 	 * BL31 binary store information about load address and entry point in
-	 * the FIP data
+	 * the FIP data. For BL3X-HDR files, BL31_MAGIC is at img_info[0x20].
 	 */
-	if(le32toh(*(uint32_t *)buf) == BL31_MAGIC) {
+	{
+	uint8_t *magic_ptr = has_bl3x_hdr ? (buf + 0x20) : buf;
+	if(le32toh(*(uint32_t *)magic_ptr) == BL31_MAGIC) {
 		off = lseek(fip->fd, 1024, SEEK_SET);
 		if(off < 0) {
 			SEEK_ERR(off, ret);
@@ -689,6 +714,7 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 			goto out;
 		}
 	}
+	}
 
 	off = lseek(fdin, skip, SEEK_SET);
 	if(off < 0) {
@@ -696,7 +722,10 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 		goto out;
 	}
 	gi_fip_dump_img(fdin, fdout, bl2sz + entry.offset);
-	fip->cursz += ROUNDUP(sz, 0x4000);
+	if (rev == GI_FIP_V3)
+		fip->cursz += sz;
+	else
+		fip->cursz += ROUNDUP(sz, 0x4000);
 
 nofdin:
 	++fip->nrentries;
@@ -1108,6 +1137,7 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		},
 	};
 	size_t i;
+	ssize_t nr;
 	off_t off;
 	int fdin = -1, fdout = -1, tmpfd = -1, ret;
 	char fippath[] = "/tmp/fip.enc.XXXXXX";
@@ -1226,6 +1256,27 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		};
 
 		for(i = 0; i < ARRAY_SIZE(data_list); ++i) {
+			if (data_list[i] == FBI_BL31_DATA) {
+				/* Proprietary tool zeroes the BL31_DATA TOC
+				 * entry but still writes the payload data */
+				off_t doff = FT_DATA_START +
+					(i * FT_DATA_SIZE);
+				off = lseek(fip.fd, doff, SEEK_SET);
+				if (off < 0) {
+					SEEK_ERR(off, ret);
+					goto out;
+				}
+				nr = gi_fip_write_blk(fip.fd,
+					(uint8_t *)&uuid_data[FBI_BL31_DATA],
+					FT_DATA_SIZE);
+				if (nr < 0) {
+					PERR("Cannot write BL31 data\n");
+					ret = -errno;
+					goto out;
+				}
+				++fip.nrentries;
+				continue;
+			}
 			ret = gi_fip_data_add(&fip, data_list[i], i);
 			if (ret < 0)
 				goto out;

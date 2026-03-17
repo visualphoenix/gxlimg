@@ -428,6 +428,11 @@ static int parse_args(struct gi_opt *gopt, int argc, char *argv[])
 			fipopt.bl2 = optarg;
 			break;
 		case '6':
+			if(fipopt.ddrfw_count >= MAX_DDRFW) {
+				ERR("Too many DDR firmwares (max %d)\n",
+						MAX_DDRFW);
+				goto out;
+			}
 			fipopt.ddrfw[fipopt.ddrfw_count++] = optarg;
 			break;
 		case '0':

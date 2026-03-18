@@ -5,11 +5,11 @@
 # so we can only do STRUCTURAL comparison (sizes, header layout, magic values),
 # not byte-identical comparison.
 #
-# Preprocessing: acs_tool.py + bl21.bin (different from G12A's acs.bin)
-{ pkgs, gxlimg }:
+# Uses mainline U-Boot (libretech-cc_defconfig) as BL33 payload.
+{ pkgs, gxlimg, uboot }:
 
 import ../compare-signing.nix {
-  inherit pkgs gxlimg;
+  inherit pkgs gxlimg uboot;
 
   boardName = "lepotato";
   fipSubdir = "lepotato";
@@ -49,13 +49,18 @@ import ../compare-signing.nix {
       --input $FIP/bl31.img \
       --output $PROP/bl31.img.enc
 
-    # FIP assembly (V2, no --level, use bl31 as dummy bl33)
+    # BL33 (mainline U-Boot)
+    run_prop --bl3enc \
+      --input $UBOOT \
+      --output $PROP/bl33.bin.enc
+
+    # FIP assembly (V2, no --level)
     run_prop --bootmk \
       --output $PROP/u-boot.bin \
       --bl2 $PROP/bl2.n.bin.sig \
       --bl30 $PROP/bl30_new.bin.enc \
       --bl31 $PROP/bl31.img.enc \
-      --bl33 $PROP/bl31.img.enc
+      --bl33 $PROP/bl33.bin.enc
   '';
 
   openSignScript = ''
@@ -66,12 +71,15 @@ import ../compare-signing.nix {
     gxlimg -t bl3x -c $TMPDIR/bl30_new.bin $OPEN/bl30_new.bin.enc
     gxlimg -t bl3x -c $FIP/bl31.img $OPEN/bl31.img.enc
 
+    # BL33 (mainline U-Boot)
+    gxlimg -t bl3x -c $UBOOT $OPEN/bl33.bin.enc
+
     # FIP assembly (V2, no --rev)
     gxlimg -t fip \
       --bl2 $OPEN/bl2.n.bin.sig \
       --bl30 $OPEN/bl30_new.bin.enc \
       --bl31 $OPEN/bl31.img.enc \
-      --bl33 $OPEN/bl31.img.enc \
+      --bl33 $OPEN/bl33.bin.enc \
       $OPEN/u-boot.bin
   '';
 
@@ -118,6 +126,7 @@ import ../compare-signing.nix {
 
     structural_compare "bl30_new.bin.enc" "$PROP/bl30_new.bin.enc" "$OPEN/bl30_new.bin.enc"
     structural_compare "bl31.img.enc"     "$PROP/bl31.img.enc"     "$OPEN/bl31.img.enc"
+    structural_compare "bl33.bin.enc"     "$PROP/bl33.bin.enc"     "$OPEN/bl33.bin.enc"
     structural_compare "u-boot.bin"       "$PROP/u-boot.bin"       "$OPEN/u-boot.bin"
   '';
 }

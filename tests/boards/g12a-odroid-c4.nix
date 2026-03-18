@@ -1,11 +1,11 @@
 # ODROID-C4 (S905X3 / SM1) — G12A family, V3 signing
 #
 # Two-step BL30, BL3X-HDR for BL31, DDR firmware in FIP.
-# This is the original test board — byte-identical 4/4 MATCH.
-{ pkgs, gxlimg }:
+# Uses mainline U-Boot (odroid-c4_defconfig) as BL33 payload.
+{ pkgs, gxlimg, uboot }:
 
 import ../compare-signing.nix {
-  inherit pkgs gxlimg;
+  inherit pkgs gxlimg uboot;
 
   boardName = "odroid-c4";
   fipSubdir = "odroid-c4";
@@ -45,18 +45,24 @@ import ../compare-signing.nix {
       --output $PROP/bl31.img.enc \
       --level v3 --type bl31
 
+    # BL33 (mainline U-Boot)
+    run_prop --bl3sig \
+      --input $UBOOT \
+      --output $PROP/bl33.bin.enc \
+      --level v3 --type bl33
+
     # BL2
     run_prop --bl2sig \
       --input $TMPDIR/bl2_new.bin \
       --output $PROP/bl2.n.bin.sig
 
-    # FIP assembly (bl31.img.enc as dummy bl33)
+    # FIP assembly
     run_prop --bootmk \
       --output $PROP/u-boot.bin --level v3 \
       --bl2 $PROP/bl2.n.bin.sig \
       --bl30 $PROP/bl30_new.bin.enc \
       --bl31 $PROP/bl31.img.enc \
-      --bl33 $PROP/bl31.img.enc \
+      --bl33 $PROP/bl33.bin.enc \
       --ddrfw1 $FIP/ddr4_1d.fw --ddrfw2 $FIP/ddr4_2d.fw \
       --ddrfw3 $FIP/ddr3_1d.fw --ddrfw4 $FIP/piei.fw \
       --ddrfw5 $FIP/lpddr4_1d.fw --ddrfw6 $FIP/lpddr4_2d.fw \
@@ -71,15 +77,18 @@ import ../compare-signing.nix {
     # BL31
     gxlimg -t bl3x -s $FIP/bl31.img $OPEN/bl31.img.enc
 
+    # BL33 (mainline U-Boot)
+    gxlimg -t bl3x -s $UBOOT $OPEN/bl33.bin.enc
+
     # BL2
     gxlimg -t bl2 -s $TMPDIR/bl2_new.bin $OPEN/bl2.n.bin.sig
 
-    # FIP assembly (same dummy bl33)
+    # FIP assembly
     gxlimg -t fip --rev v3 \
       --bl2 $OPEN/bl2.n.bin.sig \
       --bl30 $OPEN/bl30_new.bin.enc \
       --bl31 $OPEN/bl31.img.enc \
-      --bl33 $OPEN/bl31.img.enc \
+      --bl33 $OPEN/bl33.bin.enc \
       --ddrfw $FIP/ddr4_1d.fw --ddrfw $FIP/ddr4_2d.fw \
       --ddrfw $FIP/ddr3_1d.fw --ddrfw $FIP/piei.fw \
       --ddrfw $FIP/lpddr4_1d.fw --ddrfw $FIP/lpddr4_2d.fw \
@@ -91,6 +100,7 @@ import ../compare-signing.nix {
   compareFiles = [
     { name = "bl30_new.bin.enc"; prop = "$PROP/bl30_new.bin.enc"; open = "$OPEN/bl30_new.bin.enc"; }
     { name = "bl31.img.enc";     prop = "$PROP/bl31.img.enc";     open = "$OPEN/bl31.img.enc"; }
+    { name = "bl33.bin.enc";     prop = "$PROP/bl33.bin.enc";     open = "$OPEN/bl33.bin.enc"; }
     { name = "bl2.n.bin.sig";    prop = "$PROP/bl2.n.bin.sig";    open = "$OPEN/bl2.n.bin.sig"; }
     { name = "u-boot.bin";       prop = "$PROP/u-boot.bin";       open = "$OPEN/u-boot.bin"; }
   ];

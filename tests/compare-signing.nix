@@ -7,6 +7,7 @@
 {
   pkgs,
   gxlimg,
+  uboot,               # mainline U-Boot (provides u-boot.bin as BL33 payload)
 
   # Board identification
   boardName,           # e.g. "odroid-c4"
@@ -56,6 +57,7 @@ pkgs.runCommand "compare-gxlimg-${boardName}" {
   set -euo pipefail
 
   FIP=${amlogic-boot-fip}/${fipSubdir}
+  UBOOT=${uboot}/u-boot.bin
   PROP=$TMPDIR/proprietary
   OPEN=$TMPDIR/opensource
   mkdir -p $PROP $OPEN $out

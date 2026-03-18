@@ -1,11 +1,11 @@
 # Khadas VIM3L (S905D3 / SM1) — G12A family, V3 signing
 #
 # Same signing flow as ODROID-C4 but uses a different aml_encrypt_g12a binary.
-# Tests that our implementation works across G12A binary variants.
-{ pkgs, gxlimg }:
+# Uses mainline U-Boot (khadas-vim3l_defconfig) as BL33 payload.
+{ pkgs, gxlimg, uboot }:
 
 import ../compare-signing.nix {
-  inherit pkgs gxlimg;
+  inherit pkgs gxlimg uboot;
 
   boardName = "khadas-vim3l";
   fipSubdir = "khadas-vim3l";
@@ -41,6 +41,12 @@ import ../compare-signing.nix {
       --output $PROP/bl31.img.enc \
       --level v3 --type bl31
 
+    # BL33 (mainline U-Boot)
+    run_prop --bl3sig \
+      --input $UBOOT \
+      --output $PROP/bl33.bin.enc \
+      --level v3 --type bl33
+
     run_prop --bl2sig \
       --input $TMPDIR/bl2_new.bin \
       --output $PROP/bl2.n.bin.sig
@@ -50,7 +56,7 @@ import ../compare-signing.nix {
       --bl2 $PROP/bl2.n.bin.sig \
       --bl30 $PROP/bl30_new.bin.enc \
       --bl31 $PROP/bl31.img.enc \
-      --bl33 $PROP/bl31.img.enc \
+      --bl33 $PROP/bl33.bin.enc \
       --ddrfw1 $FIP/ddr4_1d.fw --ddrfw2 $FIP/ddr4_2d.fw \
       --ddrfw3 $FIP/ddr3_1d.fw --ddrfw4 $FIP/piei.fw \
       --ddrfw5 $FIP/lpddr4_1d.fw --ddrfw6 $FIP/lpddr4_2d.fw \
@@ -61,13 +67,17 @@ import ../compare-signing.nix {
   openSignScript = ''
     gxlimg -t bl30 -s $TMPDIR/bl30_new.bin $OPEN/bl30_new.bin.enc
     gxlimg -t bl3x -s $FIP/bl31.img $OPEN/bl31.img.enc
+
+    # BL33 (mainline U-Boot)
+    gxlimg -t bl3x -s $UBOOT $OPEN/bl33.bin.enc
+
     gxlimg -t bl2 -s $TMPDIR/bl2_new.bin $OPEN/bl2.n.bin.sig
 
     gxlimg -t fip --rev v3 \
       --bl2 $OPEN/bl2.n.bin.sig \
       --bl30 $OPEN/bl30_new.bin.enc \
       --bl31 $OPEN/bl31.img.enc \
-      --bl33 $OPEN/bl31.img.enc \
+      --bl33 $OPEN/bl33.bin.enc \
       --ddrfw $FIP/ddr4_1d.fw --ddrfw $FIP/ddr4_2d.fw \
       --ddrfw $FIP/ddr3_1d.fw --ddrfw $FIP/piei.fw \
       --ddrfw $FIP/lpddr4_1d.fw --ddrfw $FIP/lpddr4_2d.fw \
@@ -79,6 +89,7 @@ import ../compare-signing.nix {
   compareFiles = [
     { name = "bl30_new.bin.enc"; prop = "$PROP/bl30_new.bin.enc"; open = "$OPEN/bl30_new.bin.enc"; }
     { name = "bl31.img.enc";     prop = "$PROP/bl31.img.enc";     open = "$OPEN/bl31.img.enc"; }
+    { name = "bl33.bin.enc";     prop = "$PROP/bl33.bin.enc";     open = "$OPEN/bl33.bin.enc"; }
     { name = "bl2.n.bin.sig";    prop = "$PROP/bl2.n.bin.sig";    open = "$OPEN/bl2.n.bin.sig"; }
     { name = "u-boot.bin";       prop = "$PROP/u-boot.bin";       open = "$OPEN/u-boot.bin"; }
   ];

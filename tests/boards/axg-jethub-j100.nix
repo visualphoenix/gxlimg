@@ -5,12 +5,11 @@
 #   - No DDR firmware in FIP assembly
 #   - BL2 preprocessing uses acs_tool.py + bl21.bin (like GXL, not acs.bin)
 #
-# Note: jethub-j80 is actually GXL, not AXG. The AXG boards in amlogic-boot-fip
-# are jethub-j100 and amper-gz80x.
-{ pkgs, gxlimg }:
+# Uses mainline U-Boot (jethub_j100_defconfig) as BL33 payload.
+{ pkgs, gxlimg, uboot }:
 
 import ../compare-signing.nix {
-  inherit pkgs gxlimg;
+  inherit pkgs gxlimg uboot;
 
   boardName = "jethub-j100";
   fipSubdir = "jethub-j100";
@@ -48,18 +47,24 @@ import ../compare-signing.nix {
       --output $PROP/bl31.img.enc \
       --level 3 --type bl31
 
+    # BL33 (mainline U-Boot)
+    run_prop --bl3sig \
+      --input $UBOOT \
+      --output $PROP/bl33.bin.enc \
+      --level 3 --type bl33
+
     # BL2
     run_prop --bl2sig \
       --input $TMPDIR/bl2_new.bin \
       --output $PROP/bl2.n.bin.sig
 
-    # FIP assembly (V3, no DDR firmware, bl31 as dummy bl33)
+    # FIP assembly (V3, no DDR firmware)
     run_prop --bootmk \
       --output $PROP/u-boot.bin --level v3 \
       --bl2 $PROP/bl2.n.bin.sig \
       --bl30 $PROP/bl30_new.bin.enc \
       --bl31 $PROP/bl31.img.enc \
-      --bl33 $PROP/bl31.img.enc
+      --bl33 $PROP/bl33.bin.enc
   '';
 
   openSignScript = ''
@@ -69,6 +74,9 @@ import ../compare-signing.nix {
     # BL31
     gxlimg -t bl3x -s $FIP/bl31.img $OPEN/bl31.img.enc
 
+    # BL33 (mainline U-Boot)
+    gxlimg -t bl3x -s $UBOOT $OPEN/bl33.bin.enc
+
     # BL2
     gxlimg -t bl2 -s $TMPDIR/bl2_new.bin $OPEN/bl2.n.bin.sig
 
@@ -77,13 +85,14 @@ import ../compare-signing.nix {
       --bl2 $OPEN/bl2.n.bin.sig \
       --bl30 $OPEN/bl30_new.bin.enc \
       --bl31 $OPEN/bl31.img.enc \
-      --bl33 $OPEN/bl31.img.enc \
+      --bl33 $OPEN/bl33.bin.enc \
       $OPEN/u-boot.bin
   '';
 
   compareFiles = [
     { name = "bl30_new.bin.enc"; prop = "$PROP/bl30_new.bin.enc"; open = "$OPEN/bl30_new.bin.enc"; }
     { name = "bl31.img.enc";     prop = "$PROP/bl31.img.enc";     open = "$OPEN/bl31.img.enc"; }
+    { name = "bl33.bin.enc";     prop = "$PROP/bl33.bin.enc";     open = "$OPEN/bl33.bin.enc"; }
     { name = "bl2.n.bin.sig";    prop = "$PROP/bl2.n.bin.sig";    open = "$OPEN/bl2.n.bin.sig"; }
     { name = "u-boot.bin";       prop = "$PROP/u-boot.bin";       open = "$OPEN/u-boot.bin"; }
   ];

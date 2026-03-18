@@ -135,10 +135,10 @@ int gi_amlcblk_init(struct amlcblk *acb, int fd)
 	acb->firstblk = fsz;
 	acb->encsz = 0;
 	acb->payloadsz = fsz;
-	ret = gi_random(acb->iv, sizeof(acb->iv));
+	ret = gi_random(acb->aeskey, sizeof(acb->aeskey));
 	if(ret < 0)
 		goto out;
-	ret = gi_random(acb->aeskey, sizeof(acb->aeskey));
+	ret = gi_random(acb->iv, sizeof(acb->iv));
 out:
 	return ret;
 }

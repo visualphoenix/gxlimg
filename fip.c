@@ -818,10 +818,35 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 		goto out;
 	}
 	gi_fip_dump_img(fdin, fdout, bl2sz + entry.offset);
-	if (FIP_IS_V3(rev))
+	if (FIP_IS_V3(rev)) {
 		fip->cursz += sz;
-	else
-		fip->cursz += ROUNDUP(sz, 0x4000);
+	} else {
+		size_t padded = ROUNDUP(sz, 0x4000);
+		size_t padlen = padded - sz;
+
+		/* Proprietary tool fills inter-blob padding with rand()
+		 * data. Match this for byte-identical V2 output. */
+		if (padlen > 0) {
+			uint8_t padbuf[512];
+			size_t j, written = 0;
+
+			off = lseek(fdout, bl2sz + entry.offset + sz,
+					SEEK_SET);
+			if (off < 0) {
+				SEEK_ERR(off, ret);
+				goto out;
+			}
+			while (written < padlen) {
+				size_t chunk = MIN(padlen - written,
+						sizeof(padbuf));
+				for (j = 0; j < chunk; j++)
+					padbuf[j] = (uint8_t)(rand() & 0xff);
+				gi_fip_write_blk(fdout, padbuf, chunk);
+				written += chunk;
+			}
+		}
+		fip->cursz += padded;
+	}
 
 nofdin:
 	++fip->nrentries;
@@ -1431,6 +1456,13 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 			goto out;
 		}
 		ret = gi_fip_dump_img(tmpfd, fdout, BL2SZ);
+		if(ret < 0)
+			goto out;
+
+		/* Pad output to match proprietary tool: each blob slot is
+		 * ROUNDUP(size, 0x4000) and the file extends to the end of
+		 * the last slot, not just the last byte of data. */
+		ret = ftruncate(fdout, bl2sz + fip.cursz);
 	} else {
 		ret = gi_fip_v3_fini(fip.fd);
 		if(ret < 0)

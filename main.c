@@ -490,6 +490,18 @@ int main(int argc, char *argv[])
 	struct gi_opt opt;
 	int ret;
 
+#ifdef REPRODUCIBLE
+	/* Seed PRNG once at startup, matching the proprietary tool's
+	 * srand(time()) in main(). With faketime pinning time(), this
+	 * makes all rand()-derived values (BL2 nonces, BL3x AES keys,
+	 * FIP encryption keys) deterministic and byte-identical. */
+	if (getenv("GXLIMG_COMPAT_NONCE")) {
+		unsigned int seed;
+		seed = (unsigned int)atoi(getenv("GXLIMG_COMPAT_NONCE"));
+		srand(seed);
+	}
+#endif
+
 	ret = parse_args(&opt, argc, argv);
 	if(ret < 0) {
 		USAGE(argc, argv);

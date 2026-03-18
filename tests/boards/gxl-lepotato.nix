@@ -1,9 +1,9 @@
 # Le Potato / Libre Computer AML-S905X-CC (S905X / GXL) — V2 AES encryption
 #
 # GXL uses AES-256-CBC encryption (amlcblk.c) instead of SHA256 signing.
-# The AES key and IV come from /dev/urandom in both proprietary and gxlimg,
-# so we can only do STRUCTURAL comparison (sizes, header layout, magic values),
-# not byte-identical comparison.
+# The proprietary tool generates AES keys via srand(time())+rand(), which
+# GXLIMG_COMPAT_NONCE matches via the same PRNG sequence.  With faketime
+# pinning time(), BL2, BL3x, and FIP encryption are all byte-identical.
 #
 # Uses mainline U-Boot (libretech-cc_defconfig) as BL33 payload.
 { pkgs, gxlimg, uboot }:
@@ -64,18 +64,23 @@ import ../compare-signing.nix {
   '';
 
   openSignScript = ''
+    # Helper: run gxlimg under faketime to match proprietary timestamp
+    run_open() {
+      faketime "$FAKETIME_FMT" gxlimg "$@"
+    }
+
     # BL2 signing (same as V3)
-    gxlimg -t bl2 -s $TMPDIR/bl2_new.bin $OPEN/bl2.n.bin.sig
+    run_open -t bl2 -s $TMPDIR/bl2_new.bin $OPEN/bl2.n.bin.sig
 
     # BL3x encryption (-c, not -s)
-    gxlimg -t bl3x -c $TMPDIR/bl30_new.bin $OPEN/bl30_new.bin.enc
-    gxlimg -t bl3x -c $FIP/bl31.img $OPEN/bl31.img.enc
+    run_open -t bl3x -c $TMPDIR/bl30_new.bin $OPEN/bl30_new.bin.enc
+    run_open -t bl3x -c $FIP/bl31.img $OPEN/bl31.img.enc
 
     # BL33 (mainline U-Boot)
-    gxlimg -t bl3x -c $UBOOT $OPEN/bl33.bin.enc
+    run_open -t bl3x -c $UBOOT $OPEN/bl33.bin.enc
 
     # FIP assembly (V2, no --rev)
-    gxlimg -t fip \
+    run_open -t fip \
       --bl2 $OPEN/bl2.n.bin.sig \
       --bl30 $OPEN/bl30_new.bin.enc \
       --bl31 $OPEN/bl31.img.enc \
@@ -83,50 +88,14 @@ import ../compare-signing.nix {
       $OPEN/u-boot.bin
   '';
 
-  # BL2 uses nonce from srand(time()) — byte-identical via faketime.
-  # BL3x and FIP use random AES keys — structural comparison only.
+  # With GXLIMG_COMPAT_NONCE + faketime, all outputs are byte-identical:
+  # BL2 nonce, BL3x AES keys/IVs, and FIP encryption all use the same
+  # srand(time())+rand() PRNG sequence as the proprietary tool.
   compareFiles = [
-    { name = "bl2.n.bin.sig"; prop = "$PROP/bl2.n.bin.sig"; open = "$OPEN/bl2.n.bin.sig"; }
+    { name = "bl2.n.bin.sig";     prop = "$PROP/bl2.n.bin.sig";     open = "$OPEN/bl2.n.bin.sig"; }
+    { name = "bl30_new.bin.enc";  prop = "$PROP/bl30_new.bin.enc";  open = "$OPEN/bl30_new.bin.enc"; }
+    { name = "bl31.img.enc";      prop = "$PROP/bl31.img.enc";      open = "$OPEN/bl31.img.enc"; }
+    { name = "bl33.bin.enc";      prop = "$PROP/bl33.bin.enc";      open = "$OPEN/bl33.bin.enc"; }
+    { name = "u-boot.bin";        prop = "$PROP/u-boot.bin";        open = "$OPEN/u-boot.bin"; }
   ];
-
-  extraDiagnostics = ''
-    echo "" >> $report
-    echo "=== GXL structural comparison (AES-encrypted, not byte-identical) ===" >> $report
-
-    structural_compare() {
-      local name="$1"
-      local prop="$2"
-      local open="$3"
-
-      if [ ! -f "$prop" ] || [ ! -f "$open" ]; then
-        echo "MISSING: $name" >> $report
-        return
-      fi
-
-      local prop_sz=$(stat -c%s "$prop")
-      local open_sz=$(stat -c%s "$open")
-
-      if [ "$prop_sz" = "$open_sz" ]; then
-        echo "STRUCTURAL-OK: $name (size=$prop_sz)" >> $report
-      else
-        echo "STRUCTURAL-DIFFER: $name (prop=$prop_sz open=$open_sz)" >> $report
-      fi
-
-      # Check AMLC magic at offset 12 (0x0C) in encrypted files
-      prop_magic=$(od -A n -t x4 -N 4 -j 12 "$prop" 2>/dev/null | tr -d ' ')
-      open_magic=$(od -A n -t x4 -N 4 -j 12 "$open" 2>/dev/null | tr -d ' ')
-      echo "  magic@0x0C: prop=$prop_magic open=$open_magic" >> $report
-
-      # Dump first 32 bytes of header
-      echo "  --- proprietary header (first 32 bytes) ---" >> $report
-      od -A x -t x1z -N 32 "$prop" >> $report 2>&1
-      echo "  --- opensource header (first 32 bytes) ---" >> $report
-      od -A x -t x1z -N 32 "$open" >> $report 2>&1
-    }
-
-    structural_compare "bl30_new.bin.enc" "$PROP/bl30_new.bin.enc" "$OPEN/bl30_new.bin.enc"
-    structural_compare "bl31.img.enc"     "$PROP/bl31.img.enc"     "$OPEN/bl31.img.enc"
-    structural_compare "bl33.bin.enc"     "$PROP/bl33.bin.enc"     "$OPEN/bl33.bin.enc"
-    structural_compare "u-boot.bin"       "$PROP/u-boot.bin"       "$OPEN/u-boot.bin"
-  '';
 }

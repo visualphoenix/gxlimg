@@ -49,6 +49,18 @@ static inline int gi_random(uint8_t *buf, size_t sz)
 	size_t i;
 	ssize_t nr;
 
+#ifdef REPRODUCIBLE
+	if (getenv("GXLIMG_COMPAT_NONCE")) {
+		/* Use rand() seeded by main() to match the proprietary
+		 * tool's srand(time())+rand() sequence. Do NOT call
+		 * srand() here — the global PRNG state must be
+		 * preserved across multiple gi_random() calls. */
+		for (i = 0; i < sz; i++)
+			buf[i] = (uint8_t)(rand() & 0xff);
+		return 0;
+	}
+#endif
+
 	ret = open("/dev/urandom", O_RDONLY);
 	if(ret < 0) {
 		PERR("Cannot open /dev/urandom: ");

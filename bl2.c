@@ -139,19 +139,11 @@ static int gi_bl2_dump_hdr(struct bl2 const *bl2, int fd)
 	if(ret < 0)
 		goto out;
 #ifdef REPRODUCIBLE
-	if (getenv("GXLIMG_COMPAT_NONCE")) {
-		/* Generate a nonce matching the proprietary tool's
-		   srand(time())+rand()&0xff sequence. Use with faketime on the
-		   proprietary binary to get byte-identical output. */
-		unsigned int seed = (unsigned int)atoi(getenv("GXLIMG_COMPAT_NONCE"));
-		srand(seed);
-		for(size_t i = 0; i < BL2IV_SZ; i++)
-			rd[i] = (uint8_t)(rand() & 0xff);
-	} else if (getenv("SOURCE_DATE_EPOCH")) {
+	if (getenv("SOURCE_DATE_EPOCH") && !getenv("GXLIMG_COMPAT_NONCE")) {
 		/* Default reproducible mode: deterministic string nonce.
 		   SOURCE_DATE_EPOCH is a UNIX epoch in base-10 and is currently 10
-		   chars long. It will no longer fit here after 2286-11-20T17:46:40 UTC
-		 */
+		   chars long. It will no longer fit here after 2286-11-20T17:46:40 UTC.
+		   GXLIMG_COMPAT_NONCE is handled by gi_random() directly. */
 		memset(rd, 0, BL2IV_SZ);
 		snprintf((char *)rd, BL2IV_SZ, "SDE=%s\n", getenv("SOURCE_DATE_EPOCH"));
 	}

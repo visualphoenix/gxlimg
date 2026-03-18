@@ -200,44 +200,102 @@ out:
 	return (enum FIP_BOOT_IMG)i;
 }
 
-#define FT_DATA_SIZE (0x468)
 /**
- * Image fixed data for V3, usage & meaning is unknown
- * We find some similar data in bl32.img header
- * Probably used for secure boot
+ * FIP entry header — memory region info for each boot stage.
+ * Matches meson64-tools' fip_entry_header_t (types.h).
+ * All fields little-endian. Entirely Amlogic-proprietary.
  */
-static uint8_t const uuid_data[][FT_DATA_SIZE] = {
-	[FBI_BL2_DATA] =  {
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00
-		/* Rest is 0x0 */
-	},
-	[FBI_BL30_DATA] = {
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x20, 0x00,
-		/* Rest is 0x0 */
-	},
-	[FBI_BL31_DATA] = {
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x30, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x30, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x30, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x40, 0x01,
-		/* Rest is 0x0 */
-	},
-	[FBI_BL32_DATA] = {
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x10, 0x05, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x20, 0x00,
-		/* Rest is 0x0 */
-	},
-	[FBI_BL33_DATA] = {},
+#pragma pack(push, 1)
+struct fip_entry_header {
+	uint64_t load_addr;        /* meson64: unk0 */
+	uint64_t entry_addr;       /* meson64: x    */
+	uint64_t alt_addr;         /* meson64: y    */
+	uint32_t region_size;      /* meson64: z    */
+	uint32_t alt_region_size;  /* meson64: z2   */
 };
+#pragma pack(pop)
+
+/**
+ * FIP entry descriptor — 0x468-byte Amlogic-proprietary block.
+ * Matches meson64-tools' fip_entry_t (types.h).
+ * Five of these sit at FIP offset 0x188.
+ */
+#pragma pack(push, 1)
+struct fip_entry_desc {
+	uint64_t reserved;                    /* 0x00: always 0 */
+	struct fip_entry_header header;       /* 0x08: memory region info */
+	uint32_t encrypted;                   /* 0x28: encryption flag */
+	uint8_t  aes_key[0x20];              /* 0x2C: AES key (zeros) */
+	uint64_t reserved2;                   /* 0x4C: always 0 */
+	uint64_t reserved3;                   /* 0x54: always 0 */
+	uint8_t  payload[0x40C];             /* 0x5C: signing metadata */
+};
+#pragma pack(pop)
+
+#define FIP_ENTRY_DESC_SZ  sizeof(struct fip_entry_desc)  /* 0x468 */
+#define FT_DATA_SIZE       FIP_ENTRY_DESC_SZ
+#define FIP_ENTRY_HDR_SZ   sizeof(struct fip_entry_header) /* 0x20 */
+
+/*
+ * Static defaults for the fip_entry_header, indexed by position in the
+ * BL3x processing loop.
+ *
+ * IMPORTANT: Position index != blob type. BL2 (partNo=0) is handled
+ * separately and does NOT increment the loop counter. So:
+ *   position 0: processing BL30, uses default_header[0] = BL2 values
+ *   position 1: processing BL31, uses default_header[1] = BL30 values
+ *   position 2: processing BL32, uses default_header[2] = BL31 values
+ *   position 3: processing BL33, uses default_header[3] = BL32 values
+ *   position 4: padding entry,   uses default_header[4] = BL33 values
+ *
+ * When a blob has BL3X-HDR, the 0x20-byte mem_region_info from the
+ * prefix overrides these defaults.
+ *
+ * Values from meson64-tools bootmk.c default_header[].
+ */
+#define FIP_ENTRY_HDR_NPOS 5
+/*
+ * Note: Values are stored in little-endian (matching the on-disk format).
+ * Amlogic SoCs are LE, so native values == LE values on target.
+ */
+static struct fip_entry_header const fip_entry_hdr_defaults[FIP_ENTRY_HDR_NPOS] = {
+	/* [0] BL2 memory region (used when processing BL30) */
+	{ .load_addr = 0x01100000 },
+
+	/* [1] BL30 memory region (used when processing BL31) */
+	{
+		.load_addr       = 0x10100000,
+		.entry_addr      = 0x05000000,
+		.alt_addr        = 0x05100000,
+		.region_size     = 0x00300000,   /* 3 MB */
+		.alt_region_size = 0x00200000,   /* 2 MB */
+	},
+
+	/* [2] BL31 memory region (used when processing BL32) */
+	{
+		.load_addr       = 0x05300000,
+		.entry_addr      = 0x05300000,
+		.alt_addr        = 0x05300000,
+		.region_size     = 0x02000000,   /* 32 MB */
+		.alt_region_size = 0x01400000,   /* 20 MB */
+	},
+
+	/* [3] BL32 memory region (used when processing BL33) */
+	{ .load_addr = 0x01000000 },
+
+	/* [4] BL33 memory region (padding entry) -- all zeros */
+	{ 0 },
+};
+
+/*
+ * BL3X-HDR override tracking. Filled during gi_fip_add() when a blob
+ * has BL3X-HDR; applied during data entry creation.
+ */
+struct fip_meminfo_override {
+	int has_override;
+	struct fip_entry_header data;
+};
+static struct fip_meminfo_override fip_overrides[FIP_ENTRY_HDR_NPOS];
 #define FT_DATA_START (0x188)
 
 /**
@@ -589,7 +647,8 @@ out:
  * @param bl2sz: BL2 Image Size
  */
 static int gi_fip_add(struct fip *fip, int fdout, int fdin,
-		enum FIP_BOOT_IMG type, enum fip_rev rev, size_t bl2sz)
+		enum FIP_BOOT_IMG type, enum fip_rev rev, size_t bl2sz,
+		int data_pos)
 {
 	static uint32_t const bl31magic[] = {
 		BL31_ENTRY_MAGIC,
@@ -629,9 +688,16 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 
 			if (le32toh(*(uint32_t *)buf) == AMLSBLK_KEY_MAGIC) {
 				/* Bare @KEY at offset 0 (no BL3X-HDR).
-				 * G12A: strip entire envelope (0x720)
-				 * AXG: preserve @AML sub-header (0x490) */
-				if (rev == GI_FIP_V3_AXG)
+				 *
+				 * BL30 (two-step: bl30sig+bl3sig) has an
+				 * inner signing layer, so strip both @KEY
+				 * nonce (0x490) and outer @AML hdr (0x290).
+				 *
+				 * BL31/BL33 (single bl3sig) need the @AML
+				 * header kept — BL2 expects it in the FIP.
+				 *
+				 * AXG always keeps the @AML header. */
+				if (rev == GI_FIP_V3_AXG || type != FBI_BL30)
 					skip = BL3xNONCE_OFF;
 				else
 					skip = BL3xNONCE_OFF + BL3xHDR_SZ;
@@ -641,6 +707,28 @@ static int gi_fip_add(struct fip *fip, int fdout, int fdin,
 				skip = BL3xIMGHDR_SZ + BL3xNONCE_OFF;
 				sz -= skip;
 				has_bl3x_hdr = 1;
+
+				/* Save BL3X-HDR data to override fip_entry
+				 * defaults (meson64-tools copies 0x20 bytes
+				 * from BL3X-HDR offset 0x10) */
+				if (data_pos >= 0 &&
+				    data_pos < FIP_ENTRY_HDR_NPOS) {
+					struct fip_entry_header hdr;
+					off_t hoff = lseek(fdin,
+						BL3xIMGHDR_INFO_OFF,
+						SEEK_SET);
+					if (hoff >= 0) {
+						ssize_t hnr = gi_fip_read_blk(
+							fdin, (uint8_t *)&hdr,
+							sizeof(hdr));
+						if (hnr == (ssize_t)sizeof(hdr)) {
+							fip_overrides[data_pos]
+								.has_override = 1;
+							fip_overrides[data_pos]
+								.data = hdr;
+						}
+					}
+				}
 			}
 		}
 	} else
@@ -749,9 +837,10 @@ out:
  * @param fip: Fip handler
  * @param type: Type of bootloader image data
  * @param index: Index of bootloader image data
+ * @param data: Pre-built FT_DATA_SIZE data buffer
  */
 static int gi_fip_data_add(struct fip *fip, enum FIP_BOOT_IMG type,
-			unsigned int index)
+			unsigned int index, const uint8_t *data)
 {
 	struct fip_toc_entry entry;
 	ssize_t nr;
@@ -782,8 +871,7 @@ static int gi_fip_data_add(struct fip *fip, enum FIP_BOOT_IMG type,
 		SEEK_ERR(off, ret);
 		goto out;
 	}
-	nr = gi_fip_write_blk(fip->fd, (uint8_t *)&uuid_data[type],
-			FT_DATA_SIZE);
+	nr = gi_fip_write_blk(fip->fd, (uint8_t *)data, FT_DATA_SIZE);
 	if(nr < 0) {
 		PERR("Cannot write FIP data entry\n");
 		ret = -errno;
@@ -1230,7 +1318,12 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		}
 	}
 
-	/* Add all BL3* images */
+	/* Add all BL3* images.
+	 * data_pos tracks the fip_entry position (0=BL30, 1=BL31, ...)
+	 * for matching fip_entry_hdr_defaults[] / fip_overrides[]. */
+	memset(fip_overrides, 0, sizeof(fip_overrides));
+	{
+	int data_pos = 0;
 	for(i = 0; i < ARRAY_SIZE(fip_bin_path); ++i) {
 		/* FBI_BL301 is no more for V3 */
 		if (FIP_IS_V3(rev) && fip_bin_path[i].type == FBI_BL301)
@@ -1251,12 +1344,22 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		} else
 			fdin = -1;
 		ret = gi_fip_add(&fip, fdout, fdin, fip_bin_path[i].type,
-					rev, bl2sz);
+					rev, bl2sz,
+					FIP_IS_V3(rev) ? data_pos : -1);
 		if(ret < 0)
 			goto out;
+		data_pos++;
+	}
 	}
 
-	/* Add the Image DATA entries, even if the image still boots without */
+	/* Add the Image DATA entries, even if the image still boots without.
+	 *
+	 * Each data entry is FT_DATA_SIZE (0x468) bytes.  The first 8 bytes
+	 * are always zero (unk1), then 0x20 bytes of fip_entry_header
+	 * (load addresses etc), then the rest is payload/keys/padding.
+	 *
+	 * The fip_entry_header uses static defaults per position, overridden
+	 * by BL3X-HDR data when present (captured in gi_fip_add above). */
 	if (FIP_IS_V3(rev)) {
 		static enum FIP_BOOT_IMG const data_list[] = {
 			FBI_BL2_DATA,
@@ -1267,6 +1370,17 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 		};
 
 		for(i = 0; i < ARRAY_SIZE(data_list); ++i) {
+			/* Build the descriptor with correct header */
+			struct fip_entry_desc desc;
+			memset(&desc, 0, sizeof(desc));
+
+			if (i < FIP_ENTRY_HDR_NPOS) {
+				if (fip_overrides[i].has_override)
+					desc.header = fip_overrides[i].data;
+				else
+					desc.header = fip_entry_hdr_defaults[i];
+			}
+
 			if (data_list[i] == FBI_BL31_DATA) {
 				/* Proprietary tool zeroes the BL31_DATA TOC
 				 * entry but still writes the payload data */
@@ -1278,8 +1392,7 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 					goto out;
 				}
 				nr = gi_fip_write_blk(fip.fd,
-					(uint8_t *)&uuid_data[FBI_BL31_DATA],
-					FT_DATA_SIZE);
+					(uint8_t *)&desc, FT_DATA_SIZE);
 				if (nr < 0) {
 					PERR("Cannot write BL31 data\n");
 					ret = -errno;
@@ -1288,7 +1401,8 @@ int gi_fip_create(char const *bl2, char const **ddrfw,
 				++fip.nrentries;
 				continue;
 			}
-			ret = gi_fip_data_add(&fip, data_list[i], i);
+			ret = gi_fip_data_add(&fip, data_list[i], i,
+						(const uint8_t *)&desc);
 			if (ret < 0)
 				goto out;
 		}

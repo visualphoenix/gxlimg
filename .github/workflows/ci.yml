@@ -35,44 +35,38 @@ jobs:
           path: result/bin/gxlimg
           overwrite: true
 
-  snapshot:
-    name: Update develop snapshot
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+  sign-uboot:
+    name: "Sign U-Boot: ${{ matrix.board }}"
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - odroid-c4
+          - khadas-vim3l
+          - bananapi-m5
+          - odroid-n2
+          - radxa-zero2
+          - khadas-vim3
+          - jethub-j100
+          - lepotato
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build signed U-Boot
+        run: nix build .#packages.x86_64-linux.uboot-${{ matrix.board }} -L
+
+      - name: Upload signed firmware
+        uses: actions/upload-artifact@v7
         with:
-          path: artifacts
-
-      - name: Prepare assets
-        run: |
-          mv artifacts/gxlimg-x86_64-linux/gxlimg gxlimg-x86_64-linux
-          mv artifacts/gxlimg-aarch64-linux/gxlimg gxlimg-aarch64-linux
-          chmod +x gxlimg-*-linux
-
-      - name: Delete old snapshot release
-        run: gh release delete develop-latest --yes --cleanup-tag 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create develop snapshot
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: develop-latest
-          target_commitish: ${{ github.sha }}
-          name: "develop snapshot (${{ github.sha }})"
-          body: "Built from develop @ ${{ github.sha }}"
-          prerelease: true
-          make_latest: false
-          files: |
-            gxlimg-x86_64-linux
-            gxlimg-aarch64-linux
+          name: uboot-${{ matrix.board }}
+          path: result/u-boot.bin
+          overwrite: true
 
   compare-tests:
     name: "Test: ${{ matrix.board }}"
@@ -81,14 +75,14 @@ jobs:
       fail-fast: false
       matrix:
         board:
-          - compare-g12a-odroid-c4
-          - compare-g12a-vim3l
-          - compare-g12a-bananapi-m5
-          - compare-g12b-odroid-n2
-          - compare-g12b-radxa-zero2
-          - compare-g12b-khadas-vim3
-          - compare-axg-jethub-j100
-          - compare-gxl-lepotato
+          - compare-odroid-c4
+          - compare-khadas-vim3l
+          - compare-bananapi-m5
+          - compare-odroid-n2
+          - compare-radxa-zero2
+          - compare-khadas-vim3
+          - compare-jethub-j100
+          - compare-lepotato
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -112,3 +106,59 @@ jobs:
           else
             echo "No report available (test may have failed to build)"
           fi
+
+  snapshot:
+    name: Update develop snapshot
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    needs: [ build, sign-uboot ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Prepare assets
+        run: |
+          mv artifacts/gxlimg-x86_64-linux/gxlimg gxlimg-x86_64-linux
+          mv artifacts/gxlimg-aarch64-linux/gxlimg gxlimg-aarch64-linux
+          chmod +x gxlimg-*-linux
+
+          for board in artifacts/uboot-*/; do
+            name=$(basename "$board")
+            cp "$board/u-boot.bin" "${name}.bin"
+          done
+
+      - name: Delete old snapshot release
+        run: gh release delete develop-latest --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create develop snapshot
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: develop-latest
+          target_commitish: ${{ github.sha }}
+          name: "develop snapshot (${{ github.sha }})"
+          body: |
+            Built from develop @ ${{ github.sha }}
+
+            ## Signed mainline U-Boot images
+            Each `uboot-*.bin` is a complete FIP image signed with gxlimg, ready to flash.
+          prerelease: true
+          make_latest: false
+          files: |
+            gxlimg-x86_64-linux
+            gxlimg-aarch64-linux
+            uboot-odroid-c4.bin
+            uboot-khadas-vim3l.bin
+            uboot-bananapi-m5.bin
+            uboot-odroid-n2.bin
+            uboot-radxa-zero2.bin
+            uboot-khadas-vim3.bin
+            uboot-jethub-j100.bin
+            uboot-lepotato.bin

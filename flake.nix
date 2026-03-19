@@ -7,17 +7,53 @@
 
   outputs = { self, nixpkgs }:
     let
+      lib = nixpkgs.lib;
       supportedSystems = [ "aarch64-linux" "x86_64-linux" ];
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+      forAllSystems = lib.genAttrs supportedSystems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
+
+      # Board configs — single source of truth for all signing parameters.
+      # Each file returns an attrset with: boardName, defconfig, fipSubdir,
+      # preprocessScript, signScript, propSignScript, compareFiles, etc.
+      boards = {
+        odroid-c4    = import ./boards/g12a-odroid-c4.nix;
+        khadas-vim3l = import ./boards/g12a-vim3l.nix;
+        bananapi-m5  = import ./boards/g12a-bananapi-m5.nix;
+        odroid-n2    = import ./boards/g12b-odroid-n2.nix;
+        radxa-zero2  = import ./boards/g12b-radxa-zero2.nix;
+        khadas-vim3  = import ./boards/g12b-khadas-vim3.nix;
+        jethub-j100  = import ./boards/axg-jethub-j100.nix;
+        lepotato     = import ./boards/gxl-lepotato.nix;
+      };
     in
     {
       packages = forAllSystems (system:
-        let pkgs = pkgsFor system; in {
+        let
+          pkgs = pkgsFor system;
+          gxlimg = self.packages.${system}.gxlimg;
+
+          # Cross-compile U-Boot for aarch64 when building on x86_64.
+          ubootPkgs = if system == "aarch64-linux"
+            then pkgs
+            else pkgs.pkgsCross.aarch64-multiplatform;
+
+          mkUBoot = defconfig: ubootPkgs.buildUBoot {
+            inherit defconfig;
+            extraMeta.platforms = [ "aarch64-linux" "x86_64-linux" ];
+            filesToInstall = [ "u-boot.bin" ];
+          };
+        in {
           gxlimg = pkgs.callPackage ./package.nix { };
           gxlimg-static = pkgs.pkgsStatic.callPackage ./package.nix { };
           default = self.packages.${system}.gxlimg;
         }
+        # Signed U-Boot packages — one per board
+        // lib.mapAttrs' (name: board:
+          lib.nameValuePair "uboot-${name}" (import ./signing/sign-uboot.nix {
+            inherit lib pkgs gxlimg board;
+            uboot = mkUBoot board.defconfig;
+          })
+        ) boards
       );
 
       checks = forAllSystems (system:
@@ -25,48 +61,22 @@
           pkgs = pkgsFor system;
           gxlimg = self.packages.${system}.gxlimg;
 
-          # Per-board mainline U-Boot builds.
-          # Each board gets its correct defconfig so we produce a real,
-          # board-specific u-boot.bin to use as the BL33 payload.
-          mkUBoot = defconfig: pkgs.buildUBoot {
+          ubootPkgs = if system == "aarch64-linux"
+            then pkgs
+            else pkgs.pkgsCross.aarch64-multiplatform;
+
+          mkUBoot = defconfig: ubootPkgs.buildUBoot {
             inherit defconfig;
-            extraMeta.platforms = [ "aarch64-linux" ];
+            extraMeta.platforms = [ "aarch64-linux" "x86_64-linux" ];
             filesToInstall = [ "u-boot.bin" ];
           };
-
-          uboot = {
-            # G12A / SM1
-            odroid-c4    = mkUBoot "odroid-c4_defconfig";
-            khadas-vim3l = mkUBoot "khadas-vim3l_defconfig";
-            bananapi-m5  = mkUBoot "bananapi-m5_defconfig";
-            # G12B
-            odroid-n2    = mkUBoot "odroid-n2_defconfig";
-            radxa-zero2  = mkUBoot "radxa-zero2_defconfig";
-            khadas-vim3  = mkUBoot "khadas-vim3_defconfig";
-            # AXG
-            jethub-j100  = mkUBoot "jethub_j100_defconfig";
-            # GXL
-            lepotato     = mkUBoot "libretech-cc_defconfig";
-          };
-
-          boardTest = path: boardUBoot: import path { inherit pkgs gxlimg; uboot = boardUBoot; };
-        in {
-          # G12A family (V3 signing, two-step BL30, DDR firmware)
-          compare-g12a-odroid-c4   = boardTest ./tests/boards/g12a-odroid-c4.nix   uboot.odroid-c4;
-          compare-g12a-vim3l       = boardTest ./tests/boards/g12a-vim3l.nix       uboot.khadas-vim3l;
-          compare-g12a-bananapi-m5 = boardTest ./tests/boards/g12a-bananapi-m5.nix uboot.bananapi-m5;
-
-          # G12B family (V3 signing, same flow as G12A)
-          compare-g12b-odroid-n2   = boardTest ./tests/boards/g12b-odroid-n2.nix   uboot.odroid-n2;
-          compare-g12b-radxa-zero2 = boardTest ./tests/boards/g12b-radxa-zero2.nix uboot.radxa-zero2;
-          compare-g12b-khadas-vim3 = boardTest ./tests/boards/g12b-khadas-vim3.nix uboot.khadas-vim3;
-
-          # AXG family (V3 signing, single-step BL30, no DDR firmware)
-          compare-axg-jethub-j100 = boardTest ./tests/boards/axg-jethub-j100.nix uboot.jethub-j100;
-
-          # GXL family (V2 AES encryption, structural comparison only)
-          compare-gxl-lepotato = boardTest ./tests/boards/gxl-lepotato.nix uboot.lepotato;
-        }
+        in
+        lib.mapAttrs' (name: board:
+          lib.nameValuePair "compare-${name}" (import ./tests/compare-signing.nix {
+            inherit pkgs gxlimg board;
+            uboot = mkUBoot board.defconfig;
+          })
+        ) boards
       );
     };
 }

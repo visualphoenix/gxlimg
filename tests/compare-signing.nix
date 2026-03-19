@@ -1,33 +1,12 @@
-# Parameterized comparison test: gxlimg vs proprietary aml_encrypt_* reference.
+# Comparison test: gxlimg vs proprietary aml_encrypt_* reference.
 #
-# Each board config provides preprocessing, signing commands, and file lists.
-# The proprietary binary is a statically-linked x86_64 ELF run via qemu-user.
-#
-# Board configs are in tests/boards/*.nix and call this with their parameters.
+# Takes a board config (from boards/*.nix) and runs both signing pipelines,
+# then compares the outputs byte-for-byte.
 {
   pkgs,
   gxlimg,
-  uboot,               # mainline U-Boot (provides u-boot.bin as BL33 payload)
-
-  # Board identification
-  boardName,           # e.g. "odroid-c4"
-  fipSubdir,           # directory in amlogic-boot-fip repo
-  propTool,            # e.g. "aml_encrypt_g12a"
-
-  # Extra nativeBuildInputs (e.g. python3 for acs_tool.py)
-  extraBuildInputs ? [],
-
-  # Shell script fragments (each is a string)
-  preprocessScript,    # shared preprocessing for both pipelines
-  propSignScript,      # proprietary signing commands
-  openSignScript,      # gxlimg signing commands
-
-  # List of { name, prop, open } for file comparison
-  # Each entry: { name = "bl30.bin.enc"; prop = "$PROP/bl30.bin.enc"; open = "$OPEN/bl30.bin.enc"; }
-  compareFiles,
-
-  # Extra diagnostic script (optional, appended to report)
-  extraDiagnostics ? "",
+  uboot,
+  board,
 }:
 
 let
@@ -38,16 +17,33 @@ let
     sha256 = "sha256-jKBym2QYeWpjFEHOSYprqG59zO/jZ7zUjfKWekf1MYw=";
   };
 
+  extraPkgs =
+    if board ? extraBuildInputs && board.extraBuildInputs == "python3"
+    then [ pkgs.python3 ]
+    else [];
+
   compareFilesBash = builtins.concatStringsSep "\n" (map (f:
     ''compare_file "${f.name}" "${f.prop}" "${f.open}"''
-  ) compareFiles);
+  ) board.compareFiles);
+
+  # GXL needs faketime on the gxlimg side for byte-identical AES keys
+  gxlFaketime = board.gxlFaketime or false;
+
+  # For GXL, wrap gxlimg calls with faketime; for V3, use signScript as-is
+  openSignScript =
+    if gxlFaketime then ''
+      run_open() {
+        faketime "$FAKETIME_FMT" gxlimg "$@"
+      }
+      ${builtins.replaceStrings ["gxlimg "] ["run_open "] board.signScript}
+    '' else board.signScript;
 in
-pkgs.runCommand "compare-gxlimg-${boardName}" {
+pkgs.runCommand "compare-gxlimg-${board.boardName}" {
   nativeBuildInputs = [
     gxlimg
     pkgs.qemu-user
     pkgs.libfaketime
-  ] ++ extraBuildInputs;
+  ] ++ extraPkgs;
 
   # The proprietary binaries read /dev/urandom for key/nonce generation.
   # Without sandbox access to /dev/urandom, qemu-x86_64 hangs.
@@ -56,7 +52,7 @@ pkgs.runCommand "compare-gxlimg-${boardName}" {
 } ''
   set -euo pipefail
 
-  FIP=${amlogic-boot-fip}/${fipSubdir}
+  FIP=${amlogic-boot-fip}/${board.fipSubdir}
   UBOOT=${uboot}/u-boot.bin
   PROP=$TMPDIR/proprietary
   OPEN=$TMPDIR/opensource
@@ -71,22 +67,24 @@ pkgs.runCommand "compare-gxlimg-${boardName}" {
 
   # Helper: run proprietary tool via qemu with faketime
   run_prop() {
-    faketime "$FAKETIME_FMT" qemu-x86_64 "$FIP/${propTool}" "$@"
+    faketime "$FAKETIME_FMT" qemu-x86_64 "$FIP/${board.propTool}" "$@"
   }
 
   #
   # === Preprocessing (shared — identical inputs for both pipelines) ===
   #
-  ${preprocessScript}
+  ${board.preprocessScript}
 
   #
-  # === Proprietary pipeline (${propTool} via qemu-x86_64) ===
+  # === Proprietary pipeline (${board.propTool} via qemu-x86_64) ===
   #
-  ${propSignScript}
+  BLD=$PROP
+  ${board.propSignScript}
 
   #
   # === Open-source pipeline (gxlimg) ===
   #
+  BLD=$OPEN
   ${openSignScript}
 
   #
@@ -120,24 +118,22 @@ pkgs.runCommand "compare-gxlimg-${boardName}" {
       echo "  proprietary: size=$prop_sz sha256=$prop_sha" >> $report
       echo "  opensource:  size=$open_sz sha256=$open_sha" >> $report
 
-      # Dump first 512 bytes of each for header comparison
       echo "  --- proprietary header (first 0x200 bytes) ---" >> $report
       od -A x -t x1z -N 512 "$prop" >> $report 2>&1
       echo "  --- opensource header (first 0x200 bytes) ---" >> $report
       od -A x -t x1z -N 512 "$open" >> $report 2>&1
 
-      # Save full hex dumps for detailed analysis
       od -A x -t x1z "$prop" > "$out/''${name}.proprietary.hex"
       od -A x -t x1z "$open" > "$out/''${name}.opensource.hex"
     fi
   }
 
-  echo "=== gxlimg vs ${propTool} comparison (${boardName} firmware) ===" > $report
+  echo "=== gxlimg vs ${board.propTool} comparison (${board.boardName} firmware) ===" > $report
   echo "" >> $report
 
   ${compareFilesBash}
 
-  ${extraDiagnostics}
+  ${board.extraDiagnostics}
 
   echo "" >> $report
   echo "=== Summary ===" >> $report
@@ -147,7 +143,6 @@ pkgs.runCommand "compare-gxlimg-${boardName}" {
 
   cat $report
 
-  # Fail the build if any files differ
   if [ "$differs" -gt 0 ]; then
     echo ""
     echo "FAILURE: $differs file(s) differ between proprietary and open-source output"

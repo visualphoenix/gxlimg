@@ -34,7 +34,7 @@ pkgs.runCommand "uboot-signed-${board.boardName}" {
   meta = {
     description = "Signed mainline U-Boot for ${board.boardDescription}";
     license = lib.licenses.unfreeRedistributableFirmware;
-    platforms = [ "aarch64-linux" ];
+    platforms = [ "aarch64-linux" "x86_64-linux" ];
   };
 } ''
   set -euo pipefail
